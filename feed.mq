@@ -1,0 +1,201 @@
+# RSS 2.0 / Atom Feed Parser for mq
+# https://www.rssboard.org/rss-specification
+# https://validator.w3.org/feed/docs/atom.html
+#
+# Parses RSS 2.0 and Atom 1.0 feed documents into a single normalized
+# structure, so callers don't need to branch on the feed format:
+#
+#   {
+#     "format": "rss" | "atom",
+#     "title": <string|None>,
+#     "link": <string|None>,
+#     "description": <string|None>,
+#     "language": <string|None>,
+#     "id": <string|None>,
+#     "updated": <string|None>,
+#     "generator": <string|None>,
+#     "image": <string|None>,
+#     "items": [<item>, ...]
+#   }
+#
+# where each item/entry is:
+#
+#   {
+#     "title": <string|None>,
+#     "link": <string|None>,
+#     "description": <string|None>,
+#     "content": <string|None>,
+#     "published": <string|None>,
+#     "updated": <string|None>,
+#     "id": <string|None>,
+#     "author": <string|None>,
+#     "categories": [<string>, ...],
+#     "enclosure": {"url": <string>, "type": <string|None>, "length": <string|None>} | None
+#   }
+#
+# Dates (pubDate / published / updated) are kept as the raw strings found
+# in the document; this module does not parse or normalize them.
+#
+# Simplifications:
+#   - RSS 1.0 (RDF) feeds are not supported, only RSS 2.0 and Atom.
+#   - Atom `xhtml`-typed content (nested XHTML instead of plain text) is
+#     not reconstructed; only direct text content is captured.
+
+import "xml"
+
+def _feed_find(element, tag):
+  let matches = filter(element["children"], fn(c): is_dict(c) && c["tag"] == tag;)
+  | if (is_empty(matches)): None else: first(matches)
+end
+
+def _feed_find_all(element, tag):
+  filter(element["children"], fn(c): is_dict(c) && c["tag"] == tag;)
+end
+
+def _feed_text(element, tag):
+  let child = _feed_find(element, tag)
+  | if (is_none(child)): None else: child["text"]
+end
+
+def _feed_attr(element, name):
+  if (is_none(element)): None else: element["attributes"][name]
+end
+
+def _feed_enclosure_of(url, type_, length):
+  if (is_none(url)): None else: {"url": url, "type": type_, "length": length}
+end
+
+def _feed_rss_enclosure(item):
+  let el = _feed_find(item, "enclosure")
+  | _feed_enclosure_of(_feed_attr(el, "url"), _feed_attr(el, "type"), _feed_attr(el, "length"))
+end
+
+def _feed_normalize_rss_item(item):
+  let guid_el = _feed_find(item, "guid")
+  | {
+      "title": _feed_text(item, "title"),
+      "link": _feed_text(item, "link"),
+      "description": _feed_text(item, "description"),
+      "content": coalesce(_feed_text(item, "content:encoded"), _feed_text(item, "encoded")),
+      "published": _feed_text(item, "pubDate"),
+      "updated": None,
+      "id": if (is_none(guid_el)): None else: guid_el["text"],
+      "author": coalesce(coalesce(_feed_text(item, "author"), _feed_text(item, "dc:creator")), _feed_text(item, "creator")),
+      "categories": map(_feed_find_all(item, "category"), fn(c): c["text"];),
+      "enclosure": _feed_rss_enclosure(item)
+    }
+end
+
+def _feed_parse_rss(root):
+  let channel = _feed_find(root, "channel")
+  | if (is_none(channel)):
+      error("feed: RSS document missing <channel> element")
+    else:
+      do
+        let image_el = _feed_find(channel, "image")
+        | {
+            "format": "rss",
+            "title": _feed_text(channel, "title"),
+            "link": _feed_text(channel, "link"),
+            "description": _feed_text(channel, "description"),
+            "language": _feed_text(channel, "language"),
+            "id": None,
+            "updated": coalesce(_feed_text(channel, "lastBuildDate"), _feed_text(channel, "pubDate")),
+            "generator": _feed_text(channel, "generator"),
+            "image": if (is_none(image_el)): None else: _feed_text(image_el, "url"),
+            "items": map(_feed_find_all(channel, "item"), _feed_normalize_rss_item)
+          }
+      end
+end
+
+def _feed_atom_link(element):
+  let links = _feed_find_all(element, "link")
+  | if (is_empty(links)): None
+    else:
+      do
+        let alt = filter(links, fn(l): is_none(_feed_attr(l, "rel")) || _feed_attr(l, "rel") == "alternate";)
+        | let chosen = if (is_empty(alt)): first(links) else: first(alt)
+        | _feed_attr(chosen, "href")
+      end
+end
+
+def _feed_atom_enclosure(element):
+  let links = _feed_find_all(element, "link")
+  | let enc = filter(links, fn(l): _feed_attr(l, "rel") == "enclosure";)
+  | if (is_empty(enc)): None
+    else:
+      do
+        let l = first(enc)
+        | _feed_enclosure_of(_feed_attr(l, "href"), _feed_attr(l, "type"), _feed_attr(l, "length"))
+      end
+end
+
+def _feed_atom_author(element):
+  let author_el = _feed_find(element, "author")
+  | if (is_none(author_el)): None else: _feed_text(author_el, "name")
+end
+
+def _feed_normalize_atom_entry(entry):
+  let summary_el = _feed_find(entry, "summary")
+  | let content_el = _feed_find(entry, "content")
+  | {
+      "title": _feed_text(entry, "title"),
+      "link": _feed_atom_link(entry),
+      "description": if (is_none(summary_el)): None else: summary_el["text"],
+      "content": if (is_none(content_el)): None else: content_el["text"],
+      "published": coalesce(_feed_text(entry, "published"), _feed_text(entry, "issued")),
+      "updated": _feed_text(entry, "updated"),
+      "id": _feed_text(entry, "id"),
+      "author": _feed_atom_author(entry),
+      "categories": map(_feed_find_all(entry, "category"), fn(c): _feed_attr(c, "term");),
+      "enclosure": _feed_atom_enclosure(entry)
+    }
+end
+
+def _feed_parse_atom(root):
+  {
+    "format": "atom",
+    "title": _feed_text(root, "title"),
+    "link": _feed_atom_link(root),
+    "description": _feed_text(root, "subtitle"),
+    "language": None,
+    "id": _feed_text(root, "id"),
+    "updated": _feed_text(root, "updated"),
+    "generator": _feed_text(root, "generator"),
+    "image": coalesce(_feed_text(root, "logo"), _feed_text(root, "icon")),
+    "items": map(_feed_find_all(root, "entry"), _feed_normalize_atom_entry)
+  }
+end
+
+# Parses an RSS 2.0 or Atom feed document and returns a normalized structure
+# (see the module doc comment at the top of this file for the shape).
+def feed_parse(input):
+  let root = xml::xml_parse(to_string(input))
+  | if (is_none(root)):
+      error("feed: empty or invalid XML input")
+    elif (root["tag"] == "rss"):
+      _feed_parse_rss(root)
+    elif (root["tag"] == "feed"):
+      _feed_parse_atom(root)
+    else:
+      error("feed: unrecognized feed format (expected <rss> or <feed> root element), got <" + root["tag"] + ">")
+end
+
+# Returns true if the parsed feed is RSS.
+def feed_is_rss(feed): feed["format"] == "rss";
+
+# Returns true if the parsed feed is Atom.
+def feed_is_atom(feed): feed["format"] == "atom";
+
+# Returns the normalized items/entries array of a parsed feed.
+def feed_items(feed): feed["items"];
+
+# Returns a Markdown table summarizing a feed's items (title, link, published/updated date).
+def feed_to_markdown_table(feed):
+  let header = "| Title | Link | Date |\n| --- | --- | --- |"
+  | let rows = map(feed["items"], fn(item):
+      let date = coalesce(item["published"], item["updated"])
+      | "| " + coalesce(item["title"], "") + " | " + coalesce(item["link"], "") + " | " + coalesce(date, "") + " |";
+    )
+  | join([header] + rows, "\n")
+end

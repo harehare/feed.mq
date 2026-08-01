@@ -1,0 +1,278 @@
+include "test"
+| include "feed"
+
+# -- Fixtures --
+
+| let rss_input = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\" xmlns:content=\"http://purl.org/rss/1.0/modules/content/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><channel><title>Example Blog</title><link>https://example.com/</link><description>An example RSS feed</description><language>en-us</language><lastBuildDate>Wed, 29 Jul 2026 10:00:00 GMT</lastBuildDate><generator>mq feed.mq test</generator><atom:link href=\"https://example.com/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/><image><url>https://example.com/logo.png</url><title>Example Blog</title><link>https://example.com/</link></image><item><title>First Post</title><link>https://example.com/posts/1</link><description>Summary of first post</description><content:encoded><![CDATA[<p>Full <b>content</b> of first post</p>]]></content:encoded><pubDate>Tue, 28 Jul 2026 09:00:00 GMT</pubDate><guid isPermaLink=\"true\">https://example.com/posts/1</guid><dc:creator>Alice</dc:creator><category>Tech</category><category>News</category><enclosure url=\"https://example.com/audio.mp3\" type=\"audio/mpeg\" length=\"123456\"/></item><item><title>Second Post</title><link>https://example.com/posts/2</link><description>Summary of second post</description><pubDate>Mon, 27 Jul 2026 08:00:00 GMT</pubDate><guid isPermaLink=\"false\">urn:uuid:1234</guid><author>bob@example.com (Bob)</author></item></channel></rss>"
+| let atom_input = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Example Atom Feed</title><subtitle>An example Atom feed</subtitle><id>https://example.com/atom.xml</id><updated>2026-07-29T10:00:00Z</updated><generator>mq feed.mq test</generator><logo>https://example.com/logo.png</logo><link href=\"https://example.com/\" rel=\"alternate\"/><link href=\"https://example.com/atom.xml\" rel=\"self\"/><entry><title>First Entry</title><link href=\"https://example.com/entries/1\" rel=\"alternate\"/><id>https://example.com/entries/1</id><updated>2026-07-28T09:00:00Z</updated><published>2026-07-28T08:00:00Z</published><summary>Summary of first entry</summary><content type=\"html\">Full content of first entry</content><author><name>Alice</name><email>alice@example.com</email></author><category term=\"Tech\"/><category term=\"News\"/><link href=\"https://example.com/audio.mp3\" rel=\"enclosure\" type=\"audio/mpeg\" length=\"123456\"/></entry><entry><title>Second Entry</title><link href=\"https://example.com/entries/2\"/><id>https://example.com/entries/2</id><updated>2026-07-27T08:00:00Z</updated><summary>Summary of second entry</summary></entry></feed>" |
+
+# -- Format detection --
+
+def test_feed_parse_rss_format():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["format"], "rss")
+  | assert(feed_is_rss(feed))
+  | assert(!feed_is_atom(feed))
+end
+
+def test_feed_parse_atom_format():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["format"], "atom")
+  | assert(feed_is_atom(feed))
+  | assert(!feed_is_rss(feed))
+end
+
+def test_feed_parse_unrecognized_root():
+  let result = try: feed_parse("<html></html>") catch: "caught"
+  | assert_eq(result, "caught")
+end
+
+# -- RSS: feed-level fields --
+
+def test_rss_feed_title():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["title"], "Example Blog")
+end
+
+def test_rss_feed_link():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["link"], "https://example.com/")
+end
+
+def test_rss_feed_description():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["description"], "An example RSS feed")
+end
+
+def test_rss_feed_language():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["language"], "en-us")
+end
+
+def test_rss_feed_updated():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["updated"], "Wed, 29 Jul 2026 10:00:00 GMT")
+end
+
+def test_rss_feed_generator():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["generator"], "mq feed.mq test")
+end
+
+def test_rss_feed_image():
+  let feed = feed_parse(rss_input)
+  | assert_eq(feed["image"], "https://example.com/logo.png")
+end
+
+def test_rss_feed_id_is_none():
+  let feed = feed_parse(rss_input)
+  | assert_none(feed["id"])
+end
+
+def test_rss_feed_item_count():
+  let feed = feed_parse(rss_input)
+  | assert_eq(len(feed_items(feed)), 2)
+end
+
+# -- RSS: item-level fields --
+
+def test_rss_item_title():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["title"], "First Post")
+end
+
+def test_rss_item_link():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["link"], "https://example.com/posts/1")
+end
+
+def test_rss_item_description():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["description"], "Summary of first post")
+end
+
+def test_rss_item_content_encoded():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["content"], "<p>Full <b>content</b> of first post</p>")
+end
+
+def test_rss_item_published():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["published"], "Tue, 28 Jul 2026 09:00:00 GMT")
+end
+
+def test_rss_item_id_from_guid():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["id"], "https://example.com/posts/1")
+end
+
+def test_rss_item_author_from_dc_creator():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["author"], "Alice")
+end
+
+def test_rss_item_categories():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["categories"], ["Tech", "News"])
+end
+
+def test_rss_item_enclosure():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_eq(item["enclosure"]["url"], "https://example.com/audio.mp3")
+  | assert_eq(item["enclosure"]["type"], "audio/mpeg")
+  | assert_eq(item["enclosure"]["length"], "123456")
+end
+
+def test_rss_item_without_enclosure_is_none():
+  let item = feed_items(feed_parse(rss_input))[1]
+  | assert_none(item["enclosure"])
+end
+
+def test_rss_item_author_from_author_tag():
+  let item = feed_items(feed_parse(rss_input))[1]
+  | assert_eq(item["author"], "bob@example.com (Bob)")
+end
+
+def test_rss_item_without_categories_is_empty():
+  let item = feed_items(feed_parse(rss_input))[1]
+  | assert_eq(item["categories"], [])
+end
+
+def test_rss_item_updated_is_none():
+  let item = feed_items(feed_parse(rss_input))[0]
+  | assert_none(item["updated"])
+end
+
+# -- Atom: feed-level fields --
+
+def test_atom_feed_title():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["title"], "Example Atom Feed")
+end
+
+def test_atom_feed_description_from_subtitle():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["description"], "An example Atom feed")
+end
+
+def test_atom_feed_id():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["id"], "https://example.com/atom.xml")
+end
+
+def test_atom_feed_updated():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["updated"], "2026-07-29T10:00:00Z")
+end
+
+def test_atom_feed_generator():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["generator"], "mq feed.mq test")
+end
+
+def test_atom_feed_image_from_logo():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["image"], "https://example.com/logo.png")
+end
+
+def test_atom_feed_link_prefers_alternate():
+  let feed = feed_parse(atom_input)
+  | assert_eq(feed["link"], "https://example.com/")
+end
+
+def test_atom_feed_language_is_none():
+  let feed = feed_parse(atom_input)
+  | assert_none(feed["language"])
+end
+
+def test_atom_feed_entry_count():
+  let feed = feed_parse(atom_input)
+  | assert_eq(len(feed_items(feed)), 2)
+end
+
+# -- Atom: entry-level fields --
+
+def test_atom_entry_title():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["title"], "First Entry")
+end
+
+def test_atom_entry_link():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["link"], "https://example.com/entries/1")
+end
+
+def test_atom_entry_id():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["id"], "https://example.com/entries/1")
+end
+
+def test_atom_entry_published():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["published"], "2026-07-28T08:00:00Z")
+end
+
+def test_atom_entry_updated():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["updated"], "2026-07-28T09:00:00Z")
+end
+
+def test_atom_entry_description_from_summary():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["description"], "Summary of first entry")
+end
+
+def test_atom_entry_content():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["content"], "Full content of first entry")
+end
+
+def test_atom_entry_author():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["author"], "Alice")
+end
+
+def test_atom_entry_categories():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["categories"], ["Tech", "News"])
+end
+
+def test_atom_entry_enclosure():
+  let item = feed_items(feed_parse(atom_input))[0]
+  | assert_eq(item["enclosure"]["url"], "https://example.com/audio.mp3")
+  | assert_eq(item["enclosure"]["type"], "audio/mpeg")
+  | assert_eq(item["enclosure"]["length"], "123456")
+end
+
+def test_atom_entry_without_rel_link():
+  let item = feed_items(feed_parse(atom_input))[1]
+  | assert_eq(item["link"], "https://example.com/entries/2")
+end
+
+def test_atom_entry_without_published_is_none():
+  let item = feed_items(feed_parse(atom_input))[1]
+  | assert_none(item["published"])
+end
+
+def test_atom_entry_without_author_is_none():
+  let item = feed_items(feed_parse(atom_input))[1]
+  | assert_none(item["author"])
+end
+
+def test_atom_entry_without_enclosure_is_none():
+  let item = feed_items(feed_parse(atom_input))[1]
+  | assert_none(item["enclosure"])
+end
+
+# -- Markdown table --
+
+def test_feed_to_markdown_table_rss():
+  let table = feed_to_markdown_table(feed_parse(rss_input))
+  | assert(contains(table, "| Title | Link | Date |"))
+  | assert(contains(table, "| First Post | https://example.com/posts/1 | Tue, 28 Jul 2026 09:00:00 GMT |"))
+end
+
+def test_feed_to_markdown_table_atom():
+  let table = feed_to_markdown_table(feed_parse(atom_input))
+  | assert(contains(table, "| First Entry | https://example.com/entries/1 | 2026-07-28T08:00:00Z |"))
+end
